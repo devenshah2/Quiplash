@@ -78,95 +78,18 @@ async function savePack(clips) {
   } finally { db.close(); }
 }
 
-const chordChanges = [
-  [48, 52, 55, 59], [45, 48, 52, 55], [50, 53, 57, 60], [43, 47, 50, 53],
-  [48, 52, 55, 57], [45, 49, 52, 55], [50, 53, 57, 60], [43, 47, 50, 53],
-];
-const riff = [[0, 2, 12], [3, 1, 12], [6, 3, 12], [9, 1, 12], [12, 2, 12], [15, 0, 12]];
-const bpm = { lobby: 113, write: 106, vote: 134, reveal: 143, scores: 116, end: 121 };
-const transpose = { lobby: 0, write: -2, vote: 3, reveal: 5, scores: 0, end: 7 };
-const hz = midi => 440 * 2 ** ((midi - 69) / 12);
+const partyTracks = {
+  lobby: { bpm: 116, bars: 16 }, write: { bpm: 105, bars: 16 },
+  vote: { bpm: 128, bars: 12 }, reveal: { bpm: 124, bars: 8 },
+  scores: { bpm: 112, bars: 8 }, end: { bpm: 126, bars: 12 },
+};
 
-// Short envelopes and a look-ahead clock keep the original combo in time between browser frames.
-class HouseBand {
-  constructor(ctx, bus) {
-    this.ctx = ctx;
-    this.gain = ctx.createGain();
-    this.gain.connect(bus);
-    this.noise = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.2), ctx.sampleRate);
-    const samples = this.noise.getChannelData(0);
-    for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
-  }
-
-  note(time, midi, duration, amplitude, type = 'triangle') {
-    const osc = this.ctx.createOscillator();
-    osc.type = type;
-    osc.frequency.value = hz(midi);
-    this.playSource(osc, time, duration, amplitude);
-  }
-
-  playSource(source, time, duration, level, filter) {
-    const env = this.ctx.createGain();
-    env.gain.setValueAtTime(0.0001, time);
-    env.gain.exponentialRampToValueAtTime(level, time + 0.008);
-    env.gain.exponentialRampToValueAtTime(0.0001, time + duration);
-    if (filter) source.connect(filter).connect(env);
-    else source.connect(env);
-    env.connect(this.gain);
-    source.onended = () => { source.disconnect(); filter?.disconnect(); env.disconnect(); };
-    source.start(time);
-    source.stop(time + duration + 0.01);
-  }
-
-  brush(time, snare) {
-    const source = this.ctx.createBufferSource();
-    source.buffer = this.noise;
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = snare ? 2300 : 7500;
-    filter.Q.value = snare ? 0.7 : 1.3;
-    this.playSource(source, time, snare ? 0.12 : 0.047, snare ? 0.12 : 0.07, filter);
-  }
-
-  start(phase, round) {
-    this.stop();
-    this.gain.gain.setValueAtTime(1, this.ctx.currentTime);
-    let step = 0;
-    let next = this.ctx.currentTime + 0.045;
-    const beat = 60 / ((bpm[phase] || 110) + (phase === 'write' ? (round - 1) * 4 : 0));
-    const key = transpose[phase] || 0;
-    const pump = () => {
-      if (this.ctx.state !== 'running') return;
-      // Recover smoothly after a throttled or sleeping tab.
-      if (next < this.ctx.currentTime) next = this.ctx.currentTime + 0.035;
-      while (next < this.ctx.currentTime + 0.2) {
-        const bar = Math.floor(step / 8) % chordChanges.length;
-        const chord = chordChanges[bar].map(note => note + key);
-        const part = step % 8;
-        this.brush(next, part === 2 || part === 6);
-        if (part % 2 === 0) {
-          const walking = [chord[0], chord[1], chord[2], chord[0] + (bar % 2 ? 2 : -1)];
-          this.note(next, walking[part / 2] - 12, beat * 0.83, 0.34, 'sine');
-        }
-        if (part === 1 || part === 4 || (bar % 2 && part === 7)) {
-          for (const tone of chord.slice(1)) this.note(next, tone + 12, beat * 0.47, 0.045);
-        }
-        const melody = riff.find(([offset]) => offset === step % 16);
-        if (melody && (phase !== 'write' || bar % 4 === 3)) {
-          this.note(next, chord[melody[1]] + melody[2], beat * 0.66, 0.105, 'sine');
-        }
-        next += beat * (part % 2 ? 0.39 : 0.61);
-        step++;
-      }
-    };
-    pump();
-    this.interval = setInterval(pump, 90);
-  }
-
-  stop() {
-    clearInterval(this.interval);
-    this.gain.gain.setValueAtTime(0, this.ctx.currentTime);
-  }
+function entryOffset(view) {
+  const track = partyTracks[view.phase];
+  const round = Math.max(0, view.round - 1);
+  const matchup = Math.max(0, (view.matchup?.number || 1) - 1);
+  const startBar = view.phase === 'end' ? 0 : (round * 4 + matchup * 2) % track.bars;
+  return startBar * 4 * 60 / track.bpm;
 }
 
 class HostSound {
@@ -176,6 +99,30 @@ class HostSound {
     this.revision = 0;
     this.packRevision = 0;
     this.muted = false;
+    this.musicMode = 'party';
+    this.musicVolume = 0.65;
+    this.ducked = false;
+    this.musicRevision = 0;
+    this.trackCache = new Map();
+  }
+
+  get contextKey() {
+    return this.phaseKey;
+  }
+
+  setMusicMode(mode) {
+    if (!['party', 'steam'].includes(mode) || this.musicMode === mode) return;
+    this.musicMode = mode;
+    if (this.current && this.phaseKey && !this.muted) {
+      this.stopMusic();
+      this.startMusic(cueFor(this.current).loop, this.current, this.revision);
+    }
+  }
+
+  setMusicVolume(value) {
+    if (!Number.isFinite(value)) return;
+    this.musicVolume = Math.max(0, Math.min(1, value));
+    this.duck(this.ducked);
   }
 
   get packName() {
@@ -226,12 +173,11 @@ class HostSound {
       if (!this.ctx) {
         this.ctx = new Context();
         this.master = this.ctx.createGain();
-        this.master.gain.value = 0.7;
+        this.master.gain.value = this.muted ? 0 : 0.88;
         this.master.connect(this.ctx.destination);
         this.musicBus = this.ctx.createGain();
-        this.musicBus.gain.value = 0.43;
+        this.musicBus.gain.value = this.musicVolume;
         this.musicBus.connect(this.master);
-        this.band = new HouseBand(this.ctx, this.musicBus);
       }
       await this.ctx.resume();
       if (this.current && !this.muted && !this.phaseKey) this.update(this.current);
@@ -240,7 +186,7 @@ class HostSound {
 
   setMuted(muted) {
     this.muted = !!muted;
-    if (this.master) this.master.gain.setValueAtTime(this.muted ? 0 : 0.7, this.ctx.currentTime);
+    if (this.master) this.master.gain.setValueAtTime(this.muted ? 0 : 0.88, this.ctx.currentTime);
     this.refresh();
   }
 
@@ -248,11 +194,16 @@ class HostSound {
     this.revision++;
     this.promptRequest?.abort();
     this.promptRequest = null;
-    for (const source of [this.loopSource, this.voiceSource]) {
-      if (source) { source.onended = null; try { source.stop(); } catch {} source.disconnect(); }
+    this.stopMusic();
+    if (this.voiceSource) {
+      this.voiceSource.onended = null;
+      try { this.voiceSource.stop(); } catch {}
+      this.voiceSource.disconnect();
+      this.voiceSource = null;
     }
-    this.loopSource = this.voiceSource = null;
-    this.band?.stop();
+    this.cueBusy = false;
+    this.queuedBanter = null;
+    this.banterUtterance = null;
     if (this.utterance) {
       this.utterance.onend = this.utterance.onerror = null;
       globalThis.speechSynthesis?.cancel();
@@ -262,7 +213,12 @@ class HostSound {
   }
 
   duck(active) {
-    if (this.musicBus) this.musicBus.gain.setTargetAtTime(active ? 0.15 : 0.43, this.ctx.currentTime, 0.07);
+    this.ducked = active;
+    if (this.musicBus) {
+      const gain = this.musicBus.gain;
+      gain.cancelScheduledValues(this.ctx.currentTime);
+      gain.setTargetAtTime(this.musicVolume * (active ? 0.24 : 1), this.ctx.currentTime, active ? 0.035 : 0.15);
+    }
   }
 
   refresh() {
@@ -286,31 +242,117 @@ class HostSound {
     } catch { return null; }
   }
 
-  async startMusic(id, v, revision) {
-    const buffer = await this.decode(id, revision);
-    if (revision !== this.revision) return;
-    if (!buffer) {
-      this.band.start(v.phase, v.round);
-      return;
-    }
-    this.loopSource = this.ctx.createBufferSource();
-    this.loopSource.buffer = buffer;
-    this.loopSource.loop = true;
-    this.loopSource.connect(this.musicBus);
-    this.loopSource.start();
+  stopMusic() {
+    this.musicRevision++;
+    const source = this.loopSource;
+    const fader = this.trackFader;
+    this.loopSource = this.trackFader = null;
+    if (!source) return;
+    const now = this.ctx.currentTime;
+    fader.gain.cancelScheduledValues(now);
+    fader.gain.setTargetAtTime(0, now, 0.024);
+    source.onended = () => { source.disconnect(); fader.disconnect(); };
+    try { source.stop(now + 0.11); } catch { source.onended(); }
   }
 
-  speak(line, revision) {
-    if (!line || revision !== this.revision || !globalThis.speechSynthesis || !globalThis.SpeechSynthesisUtterance) return;
+  async partyBuffer(phase) {
+    if (!partyTracks[phase]) return null;
+    if (this.trackCache.has(phase)) {
+      const entry = this.trackCache.get(phase);
+      this.trackCache.delete(phase);
+      this.trackCache.set(phase, entry);
+      return entry;
+    }
+    const load = async () => {
+      try {
+        const response = await fetch(new URL('./assets/music/' + phase + '.mp3', import.meta.url));
+        if (!response.ok) throw new Error('Music unavailable');
+        return await this.ctx.decodeAudioData(await response.arrayBuffer());
+      } catch {
+        this.trackCache.delete(phase);
+        return null;
+      }
+    };
+    // Cache three decoded stereo tracks. Repeated matchups can transition without a fetch.
+    if (this.trackCache.size >= 3) this.trackCache.delete(this.trackCache.keys().next().value);
+    const entry = load();
+    this.trackCache.set(phase, entry);
+    return entry;
+  }
+
+  async startMusic(id, view, revision) {
+    const serial = ++this.musicRevision;
+    const steam = this.musicMode === 'steam' ? await this.decode(id, revision) : null;
+    if (revision !== this.revision || serial !== this.musicRevision) return;
+    const buffer = steam || await this.partyBuffer(view.phase);
+    if (!buffer || revision !== this.revision || serial !== this.musicRevision) return;
+    const source = this.ctx.createBufferSource();
+    const fader = this.ctx.createGain();
+    source.buffer = buffer;
+    source.loop = Boolean(steam) || view.phase !== 'end';
+    source.connect(fader).connect(this.musicBus);
+    fader.gain.setValueAtTime(0, this.ctx.currentTime);
+    fader.gain.linearRampToValueAtTime(1, this.ctx.currentTime + 0.075);
+    source.onended = () => {
+      source.disconnect(); fader.disconnect();
+      if (this.loopSource === source) this.loopSource = this.trackFader = null;
+    };
+    this.loopSource = source;
+    this.trackFader = fader;
+    source.start(0, steam ? 0 : entryOffset(view));
+  }
+
+  banter(line, phaseKey = this.contextKey) {
+    const text = typeof line === 'string' ? line.replace(/\s+/g, ' ').trim().slice(0, 400) : '';
+    if (!text || !phaseKey || this.muted || this.ctx?.state !== 'running' || phaseKey !== this.contextKey) return false;
+    this.queuedBanter = text;
+    this.flushBanter();
+    return true;
+  }
+
+  cancelBanter() {
+    this.queuedBanter = null;
+    if (!this.banterUtterance || this.utterance !== this.banterUtterance) return;
+    this.utterance.onend = this.utterance.onerror = null;
+    this.banterUtterance = this.utterance = null;
+    globalThis.speechSynthesis?.cancel();
+    this.duck(false);
+  }
+
+  flushBanter() {
+    if (this.cueBusy || this.utterance || this.voiceSource || !this.queuedBanter) return;
+    const line = this.queuedBanter;
+    this.queuedBanter = null;
+    this.banterUtterance = this.speak(line, this.revision, () => this.flushBanter());
+  }
+
+  finishCue(revision) {
+    if (revision !== this.revision) return;
+    this.cueBusy = false;
+    this.flushBanter();
+  }
+
+  speak(line, revision, after) {
+    if (revision !== this.revision) return;
+    if (!line || !globalThis.speechSynthesis || !globalThis.SpeechSynthesisUtterance) {
+      after?.();
+      return;
+    }
     const utterance = new SpeechSynthesisUtterance(line);
     utterance.lang = 'en-US';
     utterance.rate = 1.08;
     utterance.onend = utterance.onerror = () => {
-      if (revision === this.revision) { this.utterance = null; this.duck(false); }
+      if (revision === this.revision) {
+        this.utterance = null;
+        if (this.banterUtterance === utterance) this.banterUtterance = null;
+        this.duck(false);
+        after?.();
+      }
     };
     this.utterance = utterance;
     this.duck(true);
     speechSynthesis.speak(utterance);
+    return utterance;
   }
 
   playVoice(buffer, revision, after) {
@@ -341,7 +383,7 @@ class HostSound {
       const buffer = await this.ctx.decodeAudioData(raw);
       this.playVoice(buffer, revision, () => this.announce({ ...cue, prompt: '' }, revision));
     } catch {
-      this.speak([cue.prompt, cue.say].filter(Boolean).join(' '), revision);
+      this.speak([cue.prompt, cue.say].filter(Boolean).join(' '), revision, () => this.finishCue(revision));
     } finally {
       if (this.promptRequest === controller) this.promptRequest = null;
     }
@@ -353,10 +395,10 @@ class HostSound {
     const buffer = await this.decode(id, revision);
     if (revision !== this.revision) return;
     if (!buffer) {
-      this.speak([cue.prompt, cue.say].filter(Boolean).join(' '), revision);
+      this.speak([cue.prompt, cue.say].filter(Boolean).join(' '), revision, () => this.finishCue(revision));
       return;
     }
-    this.playVoice(buffer, revision);
+    this.playVoice(buffer, revision, () => this.finishCue(revision));
   }
 
   update(view) {
@@ -367,6 +409,7 @@ class HostSound {
     this.clearPlayback();
     this.phaseKey = key;
     const cue = cueFor(view);
+    this.cueBusy = true;
     if (cue.loop) this.startMusic(cue.loop, view, this.revision);
     if (view.phase === 'vote' && /^\d{1,10}$/.test(view.localPromptAudioId) && isSteamLauncher()) {
       this.questionThenVote(cue, view.localPromptAudioId, this.revision);
