@@ -2,6 +2,7 @@ import { hostRoom, joinRoom } from './network.js';
 import { createGame, join, setConnected, act, tick, view } from './game.js';
 import { createEditor } from './editor.js';
 import { renderAnswer } from './rich.js';
+import { loadSteamQuestions, useSteamQuestions } from './steam-questions.js';
 import { sound, steamCueIds } from './audio.js';
 import { icon, escapeText as e, button } from './ui.js';
 import { landing, fieldJoin, rules, stage } from './screens.js';
@@ -80,7 +81,7 @@ function show(v, force=false) {
   if(!force&&renderKey===key){updateSmall();return;}
   renderKey=key;
   releaseEditor();
-  main.dataset.phase=v.phase;
+  main.dataset.phase=v.phase;main.dataset.role=role;
   main.innerHTML=stage(v,role==='host',room,invite,qr,choices);
   if(v.matchup)main.querySelectorAll('[data-answer]').forEach(el=>{
     const a=v.matchup.options[Number(el.dataset.answer)].answer;
@@ -139,6 +140,11 @@ async function startHost(stored=null) {
   if(stored)for(const p of game.members)setConnected(game,p.id,false);
   loadScreen(stored?'Restoring room':'Opening the room');
   try {
+    if(localSteam&&!stored){
+      const pack=await loadSteamQuestions();
+      if(attempt!==revision)return;
+      useSteamQuestions(game,pack);
+    }
     const handle=await hostRoom({code:stored?.room,onStatus:status=>{if(revision===attempt)changeStatus(status);},
       onJoin(id,name) {
         if(revision!==attempt)return;
@@ -289,7 +295,8 @@ async function loadSound() {
       }));
       files.push(...batch.filter(Boolean));
     }
-    if(files.length)await sound.importFiles(files);
+    if(files.length)await sound.importFiles(files,{persist:false});
+    else notify('Steam audio is unavailable. Using the house band.');
   }catch{notify('Could not load the Steam audio. The house band is ready.');}
 }
 glyphs();main.innerHTML=landing();main.dataset.phase='home';
@@ -302,4 +309,3 @@ if(invited&&/^[A-Z]{4}$/.test(invited)){
 }else if(params.has('host')&&stored?.role==='host'&&stored.room===params.get('host')&&stored.game?.members){
   startHost(stored);
 }
-

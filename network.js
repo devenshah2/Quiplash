@@ -67,8 +67,9 @@ function post(connection, message) {
   }
 }
 
+// Page exit must preserve the UI’s saved session for a tab refresh.
 function closeOnExit(close) {
-  const onHide = event => { if (!event.persisted) close(); };
+  const onHide = event => { if (!event.persisted) close(true); };
   window.addEventListener("pagehide", onHide);
   return () => window.removeEventListener("pagehide", onHide);
 }
@@ -117,14 +118,14 @@ function registerHost(code, { onJoin, onLeave, onMessage, status }) {
     const initialTimeout = setTimeout(() => fail(new Error("The room service took too long to respond. Check your connection and try again.")), 14000);
     const unbind = closeOnExit(close);
 
-    function close() {
+    function close(silent = false) {
       if (ended) return;
       ended = true;
       clearTimeout(initialTimeout);
       clearTimeout(retry);
       unbind();
       peer.destroy();
-      if (opened) status("closed");
+      if (opened && !silent) status("closed");
     }
 
     function fail(error) {
@@ -230,13 +231,13 @@ export async function joinRoom({ code: input, name, onMessage = noop, onStatus =
       previous?.destroy();
     }
 
-    function close() {
+    function close(silent = false) {
       if (closed) return;
       closed = true;
       resetAttempt();
       unbind();
       window.removeEventListener("online", online);
-      status("closed");
+      if (!silent) status("closed");
       if (!everJoined) reject(new Error("The connection closed before you joined the room."));
     }
 

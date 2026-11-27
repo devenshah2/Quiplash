@@ -74,14 +74,17 @@ export function setConnected(game, id, connected) {
 
 function dealPrompts(game, count) {
   const isFinal = game.round === 3;
-  const key = isFinal ? 'finalDeck' : 'promptDeck';
-  const bank = isFinal ? finalPrompts : prompts;
+  const localBank = !isFinal && game.steamQuestions?.length ? game.steamQuestions : null;
+  const key = localBank ? 'steamDeck' : isFinal ? 'finalDeck' : 'promptDeck';
+  const bank = localBank ? localBank.map((_, index) => index) : isFinal ? finalPrompts : prompts;
   const drawn = [];
   while (drawn.length < count) {
     if (!game[key].length) game[key] = shuffled(bank.filter(prompt => !drawn.includes(prompt)));
     drawn.push(game[key].pop());
   }
-  return drawn;
+  return drawn.map(item => localBank
+    ? { prompt: localBank[item].prompt, localPromptAudioId: localBank[item].id }
+    : { prompt: item });
 }
 
 function beginRound(game, now) {
@@ -89,12 +92,12 @@ function beginRound(game, now) {
   const lineup = shuffled(contestants(game).map(member => member.seat));
   const final = game.round === 3;
   const roundPrompts = dealPrompts(game, final ? 1 : lineup.length);
-  game.matches = shuffled(roundPrompts.map((prompt, i) => {
+  game.matches = shuffled(roundPrompts.map((question, i) => {
     // A random cycle gives each player two distinct opponents, including with odd player counts.
     const writers = final ? lineup : [lineup[i], lineup[(i + 1) % lineup.length]];
     const id = 'q' + game.nextMatch++;
     return {
-      id, prompt,
+      id, ...question,
       options: shuffled(writers).map((seat, n) => ({ id: id + '-' + n, seat, answer: null })),
       ballots: [], result: null,
     };
@@ -292,6 +295,7 @@ export function view(game, id = null) {
   const voted = Boolean(member && match?.ballots.some(ballot => ballot.seat === member.seat));
   return {
     phase: game.phase, round: game.round, deadline: game.deadline,
+    ...(id === null && voting && match.localPromptAudioId ? { localPromptAudioId: match.localPromptAudioId } : {}),
     players: contestants(game).map(publicMember),
     audienceCount: game.members.filter(member => member.role === 'audience' && member.connected).length,
     me: member ? publicMember(member) : null,

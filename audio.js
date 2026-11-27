@@ -1,3 +1,5 @@
+import { isSteamLauncher } from './steam-questions.js';
+
 // Cue IDs are identifiers from Quiplash 2. Imported recordings live only on this host.
 const music = {
   lobby: 104463, write: [104441, 104442, 104443],
@@ -192,7 +194,7 @@ class HostSound {
     return this.clips.size;
   }
 
-  async importFiles(input) {
+  async importFiles(input, { persist = true } = {}) {
     const clips = new Map();
     const selected = Array.from(input || []).filter(file => {
       const match = /^(\d+)\.ogg$/i.exec(file.name);
@@ -209,8 +211,10 @@ class HostSound {
     if (!clips.size) throw new Error('Choose the Quiplash2 folder or its TalkshowExport/project/media folder from The Jackbox Party Pack 3.');
     this.packRevision++;
     this.clips = clips;
-    this.sessionOnly = false;
-    try { await savePack(clips); } catch { this.sessionOnly = true; }
+    this.sessionOnly = !persist;
+    if (persist) {
+      try { await savePack(clips); } catch { this.sessionOnly = true; }
+    }
     this.refresh();
     return clips.size;
   }
@@ -242,6 +246,8 @@ class HostSound {
 
   clearPlayback() {
     this.revision++;
+    this.promptRequest?.abort();
+    this.promptRequest = null;
     for (const source of [this.loopSource, this.voiceSource]) {
       if (source) { source.onended = null; try { source.stop(); } catch {} source.disconnect(); }
     }
@@ -307,6 +313,40 @@ class HostSound {
     speechSynthesis.speak(utterance);
   }
 
+  playVoice(buffer, revision, after) {
+    if (revision !== this.revision) return;
+    const source = this.ctx.createBufferSource();
+    this.voiceSource = source;
+    source.buffer = buffer;
+    source.connect(this.master);
+    this.duck(true);
+    source.onended = () => {
+      source.disconnect();
+      if (revision !== this.revision) return;
+      this.voiceSource = null;
+      this.duck(false);
+      after?.();
+    };
+    source.start();
+  }
+
+  async questionThenVote(cue, id, revision) {
+    const controller = new AbortController();
+    this.promptRequest = controller;
+    try {
+      const response = await fetch('/_steam/question/' + id + '.ogg', { signal: controller.signal, redirect: 'error' });
+      if (!response.ok) throw new Error('Missing local recording');
+      const raw = await response.arrayBuffer();
+      if (revision !== this.revision) return;
+      const buffer = await this.ctx.decodeAudioData(raw);
+      this.playVoice(buffer, revision, () => this.announce({ ...cue, prompt: '' }, revision));
+    } catch {
+      this.speak([cue.prompt, cue.say].filter(Boolean).join(' '), revision);
+    } finally {
+      if (this.promptRequest === controller) this.promptRequest = null;
+    }
+  }
+
   async announce(cue, revision) {
     const options = (cue.voices || []).filter(id => this.clips.has(id));
     const id = options[Math.floor(Math.random() * options.length)];
@@ -316,17 +356,7 @@ class HostSound {
       this.speak([cue.prompt, cue.say].filter(Boolean).join(' '), revision);
       return;
     }
-    const source = this.ctx.createBufferSource();
-    this.voiceSource = source;
-    source.buffer = buffer;
-    source.connect(this.master);
-    this.duck(true);
-    source.onended = () => {
-      source.disconnect();
-      this.voiceSource = null;
-      if (revision === this.revision) this.duck(false);
-    };
-    source.start();
+    this.playVoice(buffer, revision);
   }
 
   update(view) {
@@ -338,7 +368,11 @@ class HostSound {
     this.phaseKey = key;
     const cue = cueFor(view);
     if (cue.loop) this.startMusic(cue.loop, view, this.revision);
-    this.announce(cue, this.revision);
+    if (view.phase === 'vote' && /^\d{1,10}$/.test(view.localPromptAudioId) && isSteamLauncher()) {
+      this.questionThenVote(cue, view.localPromptAudioId, this.revision);
+    } else {
+      this.announce(cue, this.revision);
+    }
   }
 }
 

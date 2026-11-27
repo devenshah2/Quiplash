@@ -150,3 +150,47 @@ test('duel ballot exclusions, missing votes, majority bonus and audience countin
   assert.equal(result.options[0].votes, 4);
   assert.equal(result.options[0].audienceVotes, 1);
 });
+
+test('local launcher question text and host-only audio IDs, including restored and final rounds', async () => {
+  const { parseSteamQuestions, useSteamQuestions, loadSteamQuestions } = await import('../steam-questions.js');
+  const rows = Array.from({ length: 20 }, (_, i) => ({
+    id: String(910000 + i), prompt: 'Synthetic fixture ' + i + ': <i>turn</i> <BLANK>.', includesPlayerName: false,
+  }));
+  const bank = parseSteamQuestions({ content: [...rows, rows[0],
+    { id: '12345', prompt: 'An answer from <ANY PLAYER>' },
+    { id: '54321', prompt: 'Reserved', includesPlayerName: true },
+    { id: '../bad', prompt: 'Bad path' },
+  ] });
+  assert.equal(bank.length, 20);
+  assert.ok(bank.every(({ prompt }) => prompt.endsWith('turn _____.')));
+  assert.deepEqual(await loadSteamQuestions(), []); // off-launcher
+  let game = fillRoom(8);
+  assert.equal(useSteamQuestions(game, bank.slice(0, 2)), false);
+  assert.equal(useSteamQuestions(game, bank), true);
+  host(game, 'start');
+  join(game, 'audience', 'Voice Fan');
+  for (let round = 1; round <= 2; round++) {
+    assert.ok(game.matches.every(match => match.localPromptAudioId));
+    for (const member of game.members) {
+      const s = JSON.stringify(view(game, member.id));
+      assert.doesNotMatch(s, /localPromptAudioId|9100\d\d|_steam|steamQuestions/);
+    }
+    writeAll(game);
+    while (game.phase === 'vote') {
+      const hostView = view(game);
+      assert.ok(bank.some(q => q.id === hostView.localPromptAudioId && q.prompt === hostView.matchup.prompt));
+      for (const member of game.members) {
+        assert.doesNotMatch(JSON.stringify(view(game, member.id)), /localPromptAudioId|9100\d\d|_steam|steamQuestions/);
+      }
+      voteAll(game);
+      assert.equal('localPromptAudioId' in view(game), false);
+      host(game, 'next');
+    }
+    game = JSON.parse(JSON.stringify(game));
+    host(game, 'next');
+  }
+  assert.equal(game.round, 3);
+  assert.ok(!game.matches[0].prompt.startsWith('Synthetic fixture'));
+  writeAll(game);
+  assert.equal('localPromptAudioId' in view(game), false);
+});

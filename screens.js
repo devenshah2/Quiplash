@@ -63,17 +63,18 @@ function writing(v, host) {
   <h2 class="prompt">${e(task.prompt)}</h2><div id="editor"></div><div class="host-controls">${button('Submit answer','submit-answer','secondary','check',true)}</div></section>`;
   const label = host ? 'Eyes on your phones!' : v.me?.role==='audience' ? 'The players are writing.' : 'Answers are in!';
   const info = host ? 'Players are writing their answers. The matchups begin when everyone submits or time runs out.' : 'Voting starts when the writing round ends.';
-  return `<section class="panel phase-panel"><h2>${label}</h2><p class="muted">${info}</p>
-  <div class="progressbar" aria-hidden="true"><span data-progress-bar></span></div><p class="progresscopy" data-progress></p></section>`;
+  return `<section class="panel phase-panel waiting-stage">${host?'<img class="stage-mascot" src="./assets/emcee.webp" alt="">':''}<div class="waiting-copy"><h2>${label}</h2><p class="muted">${info}</p>
+  <div class="progressbar" aria-hidden="true"><span data-progress-bar></span></div><p class="progresscopy" data-progress></p></div></section>`;
 }
 function showMatch(v, host, choices) {
   const m=v.matchup;
   const reveal=v.phase==='reveal';
+  const topVotes=reveal?Math.max(...m.options.map(o=>o.votes)):0;
   const reason={jinx:'Jinx! Both writers gave the same answer.',walkover:'Only one answer came in.',empty:'Time ran out on this prompt.'}[m.outcome];
   const untilVote = v.voted ? 'Vote locked in.' : v.canVote ? (v.voteLimit===3 ? 'Give out three votes. You can stack them on a favorite.' : 'Choose the answer that made you laugh.') : 'The other players are voting on your matchup.';
   return `<section class="panel phase-panel"><span class="phase-label">${v.round===3?'One prompt for everyone':'Matchup '+m.number+' of '+m.total}</span><h2 class="prompt">${e(m.prompt)}</h2>
     ${reason?`<p class="vote-nudge">${reason}</p>`:''}${!reveal&&!host?`<p class="muted">${untilVote}</p>`:''}
-    <div class="options">${m.options.map((o,i)=>`<article class="option"><div class="choice-meta"><span class="letter">${String.fromCharCode(65+i)}</span>${o.mine?'Your answer':''}${o.sweep?badge('Clean sweep','lime','bolt'):''}</div>
+    <div class="options">${m.options.map((o,i)=>`<article class="option${reveal&&topVotes>0&&o.votes===topVotes?' top-answer':''}"><div class="choice-meta"><span class="letter">${String.fromCharCode(65+i)}</span>${o.mine?'Your answer':''}${o.sweep?badge('Clean sweep','lime','bolt'):''}</div>
     <div class="answer-body" data-answer="${i}">${o.missing?'No answer in time':''}</div>
     ${reveal?`<p class="breakdown"><strong>${e(o.author)}</strong><br>${o.votes} ${o.votes===1?'vote':'votes'} · +${o.points.toLocaleString()} pts</p>`:''}
     ${!reveal&&v.canVote&&!o.mine&&!o.missing?`<button class="btn neutral" data-vote="${e(o.id)}" aria-label="Vote for answer ${String.fromCharCode(65+i)}">${v.voteLimit===1?'Choose '+String.fromCharCode(65+i):'Add vote'}${choices.includes(o.id)?` (${choices.filter(id=>id===o.id).length})`:''}</button>`:''}</article>`).join('')}</div>
@@ -100,4 +101,3 @@ function stage(v, host, code, invite, qr, choices) {
 }
 
 export {landing,fieldJoin,rules,stage};
-
