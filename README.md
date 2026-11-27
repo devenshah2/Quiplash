@@ -10,7 +10,7 @@ Punchline is a browser party game for 3–8 players and a voting audience. Two p
 2. Everyone, including the host if they want a seat, opens the invite link on a phone, scans the lobby QR code, or enters the four-letter room code. Each player chooses a name.
 3. Start the game once at least three players have joined. Extra guests and late arrivals join the voting audience. Keep the host tab open through the final scores.
 
-Each answer supports 160 characters, bold and italic text, and one embedded image. Browse the 45 bundled animated reactions, search Wikimedia Commons from the GIF picker, paste an image or GIF link, or upload a picture or animation. Large uploads are resized on the device. Player refreshes in the same tab can restore a seat and an in-progress draft.
+Each answer supports 160 characters, bold and italic text, and one embedded image. Tap **GIF** to browse trending memes or search [GifSnap](https://gifsnap.com/) by show, character, or reaction. Choose **More GIFs** for the next page of results. The picker also includes the original emoji shelf and Wikimedia Commons search. You can paste an image link or upload a picture or animation. Large uploads are resized on the device. Player refreshes in the same tab can restore a seat and an in-progress draft.
 
 ## Play with your installed Quiplash 2 host and music
 

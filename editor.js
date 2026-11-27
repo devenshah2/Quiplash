@@ -1,5 +1,6 @@
 import { MAX_TEXT, MAX_MEDIA_BYTES, normalizeAnswer, safeImageSource } from './rich.js';
 import { gifs } from './assets/gifs/catalog.js';
+import { searchGifSnap } from './assets/gifs/gifsnap.js';
 import { searchCommons } from './assets/gifs/commons.js';
 
 const gifPath = gif => 'assets/gifs/' + gif.id + '.gif';
@@ -19,11 +20,12 @@ function button(className, text, label = text) {
   return element;
 }
 
-function imagePart(src, alt) {
+function imagePart(src, alt, gifSnap) {
   const image = make('img', 'qa-inline-image');
   image.src = src;
   image.alt = alt || 'Attached image';
   image.referrerPolicy = 'no-referrer';
+  if (gifSnap) {image.dataset.gifId=gifSnap.id; image.dataset.gifSource=gifSnap.source;}
   image.draggable = false;
   image.contentEditable = 'false';
   return image;
@@ -32,7 +34,7 @@ function imagePart(src, alt) {
 function contentFragment(value) {
   const fragment = document.createDocumentFragment();
   for (const item of value?.parts || []) {
-    if (item.type === 'image') fragment.append(imagePart(item.src, item.alt));
+    if (item.type === 'image') fragment.append(imagePart(item.src, item.alt, item.gifSnap));
     else {
       let node = document.createTextNode(item.text);
       for (const tag of [item.bold && 'b', item.italic && 'i'].filter(Boolean)) {
@@ -58,7 +60,11 @@ function readParts(root) {
     if (['SCRIPT', 'STYLE', 'TEMPLATE', 'IFRAME', 'OBJECT', 'SVG', 'MATH'].includes(tagName)) return;
     if (tagName === 'IMG') {
       const src = safeImageSource(node.getAttribute('src'));
-      if (src) parts.push({ type: 'image', src, alt: node.alt || 'Attached image' });
+      if (src) {
+        const image = { type:'image', src, alt:node.alt || 'Attached image' };
+        if (node.dataset.gifId) image.gifSnap = {id:node.dataset.gifId, source:node.dataset.gifSource || ''};
+        parts.push(image);
+      }
       return;
     }
     if (tagName === 'BR') {
@@ -213,6 +219,7 @@ export function createEditor(container, { initial, onChange } = {}) {
   let busy = false;
   let openPanel = '';
   let onlineRequest = null;
+  let pickerTimer;
   let countValue = 0;
   function currentRange() {
     const sel = window.getSelection();
@@ -252,6 +259,7 @@ export function createEditor(container, { initial, onChange } = {}) {
     onChange?.(busy ? null : normalizeAnswer({ parts }));
   }
   function closePanel(focusBack = false) {
+    clearTimeout(pickerTimer);
     onlineRequest?.abort();
     onlineRequest = null;
     chooser.replaceChildren();
@@ -273,15 +281,14 @@ export function createEditor(container, { initial, onChange } = {}) {
     restore();
     changed();
   }
-  function putImage(src, alt) {
+  function putImage(src, alt, gifSnap=null) {
     if (!safeImageSource(src)) return;
     const existing = field.querySelector('img');
     if (existing) {
-      existing.src = src;
-      existing.alt = alt;
+      existing.replaceWith(imagePart(src, alt, gifSnap));
       changed();
     } else {
-      insert(imagePart(src, alt));
+      insert(imagePart(src, alt, gifSnap));
     }
     closePanel(true);
   }
@@ -318,85 +325,147 @@ export function createEditor(container, { initial, onChange } = {}) {
     return true;
   }
   function showGifs() {
-    if (!panel('gif', 'Reaction GIFs')) return;
+    if (!panel('gif', 'GIF keyboard')) return;
     gif.setAttribute('aria-expanded', 'true');
+    const sources = make('div', 'qa-sources');
+    sources.setAttribute('role', 'group');
+    sources.setAttribute('aria-label', 'GIF library');
     const search = make('input', 'qa-search');
     search.type = 'search';
-    search.placeholder = 'Search reactions';
+    search.maxLength = 120;
     search.setAttribute('aria-label', 'Search reaction GIFs');
+    const shortcuts = make('div', 'qa-suggestions');
+    for (const word of ['This is fine', 'The Office', 'Side eye', 'Popcorn']) {
+      const chip = button('qa-chip', word, 'Search for ' + word);
+      chip.onclick = () => { search.value = word; refresh(); };
+      shortcuts.append(chip);
+    }
     const grid = make('div', 'qa-grid');
-    const online = button('qa-online', 'Search Wikimedia Commons', 'Search Wikimedia Commons for GIFs');
     const message = make('p', 'qa-source-status');
     message.setAttribute('role', 'status');
-    async function searchOnline() {
-      if (!search.value.trim()) { search.focus(); return; }
+    const actions = make('div', 'qa-result-actions');
+    const more = button('qa-online', 'More GIFs');
+    const retry = button('qa-online','Retry search');
+    const credit = make('a', 'qa-credit');
+    credit.target = '_blank';
+    credit.rel = 'noopener noreferrer';
+    actions.append(credit, more, retry);
+    chooser.append(sources, search, shortcuts, message, grid, actions);
+
+    let library = 'Meme GIFs';
+    let nextPage = null, failedPage = 1;
+    const seen = new Set();
+    const isCurrent = ctl => alive && onlineRequest === ctl && chooser.contains(grid);
+    function addTile(item) {
+      const key = item.key || item.src;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const option = button('qa-option', '', 'Insert ' + item.name);
+      const image = make('img');
+      image.alt = '';
+      image.loading = 'lazy';
+      image.decoding = 'async';
+      image.referrerPolicy = 'no-referrer';
+      const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      image.src = reduce && item.still ? item.still : item.preview;
+      if (reduce && library !== 'Emoji') {
+        image.onload = () => {
+          // Some provider posters are themselves animated. Freeze the decoded frame.
+          const canvas = make('canvas');
+          canvas.width = 180;
+          canvas.height = Math.max(1, Math.min(420, Math.round(180 * image.naturalHeight / image.naturalWidth)));
+          canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
+          image.replaceWith(canvas);
+        };
+      }
+      const fallbacks = [...new Set([item.src, item.still].filter(Boolean))].filter(url => url !== image.getAttribute('src'));
+      image.onerror = () => {
+        if (fallbacks.length) { image.src = fallbacks.shift(); return; }
+        option.remove();
+        if (!grid.childElementCount) message.textContent = 'The previews could not load. Try another search.';
+      };
+      option.append(image, make('span', '', item.name));
+      option.onclick = () => {
+        ++uploadVersion; busy = false;
+        const credit = library === 'Meme GIFs' ? {id:item.id, source:item.source} : null;
+        putImage(item.src, item.name, credit);
+      };
+      grid.append(option);
+    }
+    function refresh(delay = 0) {
+      clearTimeout(pickerTimer);
+      onlineRequest?.abort();
+      onlineRequest = null;
+      grid.replaceChildren();
+      grid.scrollTop = 0;
+      seen.clear();
+      nextPage = null;
+      more.hidden = retry.hidden = true;
+      const meme = library === 'Meme GIFs', emoji = library === 'Emoji';
+      shortcuts.hidden = !meme;
+      grid.classList.toggle('qa-meme-grid', !emoji);
+      for (const control of sources.children) control.setAttribute('aria-pressed', String(control.textContent === library));
+      search.placeholder = meme ? 'Search memes, shows, or reactions…' : emoji ? 'Search emoji reactions…' : 'Search Wikimedia Commons…';
+      credit.textContent = meme ? 'Powered by GifSnap' : emoji ? 'Google Noto Emoji · CC BY 4.0' : 'Wikimedia Commons';
+      credit.href = meme ? 'https://gifsnap.com/' : emoji ? 'assets/gifs/CREDITS.md' : 'https://commons.wikimedia.org/';
+      const query = search.value.trim();
+      if (emoji) {
+        const words = query.toLowerCase().split(/\s+/);
+        for (const item of gifs.filter(g => words.every(w => (g.name + ' ' + g.tags).toLowerCase().includes(w)))) {
+          const base = 'assets/gifs/previews/' + item.id;
+          addTile({ name:item.name, src:gifPath(item), preview:base+'.webp', still:base+'.png' });
+        }
+        message.textContent = seen.size ? '' : 'No matching emoji.';
+      } else if (!meme && !query) {
+        message.textContent = 'Enter a search to find public-domain GIFs.';
+      } else {
+        message.textContent = query ? 'Searching…' : 'Loading trending GIFs…';
+        if (delay) pickerTimer = setTimeout(() => load(1), delay);
+        else load(1);
+      }
+    }
+    async function load(page) {
       onlineRequest?.abort();
       const controller = new AbortController();
       onlineRequest = controller;
-      const timer = setTimeout(() => controller.abort(), 10000);
-      message.textContent = 'Searching Wikimedia Commons…';
-      online.disabled = true;
+      const timer = setTimeout(() => controller.abort(), 12000);
+      const query = search.value.trim();
+      more.hidden = retry.hidden = true;
+      grid.setAttribute('aria-busy', 'true');
+      if (page > 1) message.textContent = 'Loading more GIFs…';
       try {
-        const options = await searchCommons(search.value, controller.signal);
-        if (!alive || onlineRequest !== controller) return;
-        grid.replaceChildren();
-        for (const item of options) {
-          const option = button('qa-option qa-online-option', '', 'Insert ' + item.name);
-          const image = make('img');
-          image.alt = '';
-          image.loading = 'lazy';
-          image.referrerPolicy = 'no-referrer';
-          image.src = item.preview;
-          option.append(image, make('span', '', item.name));
-          option.onclick = () => { ++uploadVersion; busy = false; putImage(item.src, item.name); };
-          grid.append(option);
-        }
-        message.textContent = options.length ? 'Public-domain GIFs from Wikimedia Commons' : 'No public-domain GIFs found. Try another search.';
-      } catch {
-        if (alive && onlineRequest === controller) message.textContent = 'Online search is unavailable. The reaction shelf is ready to use.';
+        const result = library === 'Meme GIFs'
+          ? await searchGifSnap(query, page, controller.signal)
+          : { items:await searchCommons(query,controller.signal), nextPage:null };
+        if (!isCurrent(controller)) return;
+        for (const item of result.items) addTile(item);
+        nextPage = result.nextPage;
+        more.hidden = nextPage === null;
+        message.textContent = !seen.size ? 'No GIFs found. Try another search.' : !query ? 'Trending GIFs' : '';
+      } catch (error) {
+        if (!isCurrent(controller)) return;
+        failedPage = page;
+        retry.hidden = false;
+        message.textContent = error.message?.includes('busy') ? error.message : 'GIF search is unavailable. Retry or choose another library.';
       } finally {
         clearTimeout(timer);
-        if (alive && onlineRequest === controller) online.disabled = false;
+        if (isCurrent(controller)) grid.setAttribute('aria-busy', 'false');
       }
     }
-    online.onclick = searchOnline;
+    for (const name of ['Meme GIFs','Emoji','Commons']) {
+      const control = button('qa-source',name);
+      control.onclick = () => { if (library !== name) { library = name; refresh(); } };
+      sources.append(control);
+    }
+    more.onclick = () => { if (nextPage) load(nextPage); };
+    retry.onclick = () => load(failedPage);
+    search.oninput = () => refresh(300);
     search.onkeydown = e => {
-      if (e.key === 'Enter' && search.value.trim()) { e.preventDefault(); searchOnline(); }
+      if (e.key === 'Enter') { e.preventDefault();refresh(); }
     };
-    function results() {
-      onlineRequest?.abort();
-      onlineRequest = null;
-      online.disabled = false;
-      online.hidden = !search.value.trim();
-      message.textContent = '';
-      grid.replaceChildren();
-      const words = search.value.trim().toLowerCase().split(/\s+/);
-      for (const item of gifs.filter(item => words.every(w => (item.name + ' ' + item.tags).toLowerCase().includes(w)))) {
-        const option = button('qa-option', '', 'Insert ' + item.name);
-        const picture = make('picture');
-        const still = make('source');
-        still.media = '(prefers-reduced-motion: reduce)';
-        still.srcset = 'assets/gifs/previews/' + item.id + '.png';
-        const image = make('img');
-        image.loading = 'lazy';
-        image.src = 'assets/gifs/previews/' + item.id + '.webp';
-        image.alt = '';
-        image.width = image.height = 64;
-        picture.append(still, image);
-        option.append(picture, make('span', '', item.name));
-        option.onclick = () => { ++uploadVersion; busy = false; putImage(gifPath(item), item.name); };
-        grid.append(option);
-      }
-      if (!grid.childElementCount) grid.append(make('p', 'qa-no-results', 'No matching reactions. Try “laugh”, “dance” or “awkward”.'));
-    }
-    search.oninput = results;
-    results();
-    const credit = make('a', 'qa-credit', 'GIFs by Google · CC BY 4.0');
-    credit.href = 'assets/gifs/CREDITS.md';
-    credit.target = '_blank';
-    credit.rel = 'noopener';
-    chooser.append(search, message, grid, online, credit);
+    refresh();
     if (matchMedia('(pointer: fine)').matches) search.focus();
+
   }
   function showLink() {
     if (!panel('link', 'Image or GIF link')) return;
@@ -493,6 +562,7 @@ export function createEditor(container, { initial, onChange } = {}) {
     getValue: value,
     focus: () => restore(),
     destroy() {
+      clearTimeout(pickerTimer);
       alive = false;
       onlineRequest?.abort();
       document.removeEventListener('selectionchange', remember);

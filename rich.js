@@ -44,7 +44,11 @@ export function normalizeAnswer(raw) {
       const src = safeImageSource(item.src);
       if (!src || hasImage) return null;
       const alt = typeof item.alt === 'string' ? item.alt.slice(0, 100).trim() : '';
-      parts.push({ type: 'image', src, alt: alt || 'Attached image' });
+      const image = { type: 'image', src, alt: alt || 'Attached image' };
+      if (src.startsWith('https://') && typeof item.gifSnap?.id === 'string' && /^[a-z0-9._-]{1,180}$/i.test(item.gifSnap.id)) {
+        image.gifSnap = { id:item.gifSnap.id, source:typeof item.gifSnap.source === 'string' ? item.gifSnap.source.slice(0,100) : '' };
+      }
+      parts.push(image);
       hasImage = true;
       continue;
     }
