@@ -93,7 +93,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Screen)
     server.game = find_game()
-    url = f"http://127.0.0.1:{server.server_port}/" + ("?steam=1" if server.game else "")
+    url = f"http://127.0.0.1:{server.server_port}/" + ("?steam=1" if server.game else "?launcher=1")
     print("Punchline host screen\n" + url, flush=True)
     print("Quiplash 2 media found." if server.game else "Steam media unavailable. Using original Punchline audio.", flush=True)
     print("Keep this window open while playing. Press Control-C to close it.", flush=True)

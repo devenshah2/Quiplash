@@ -10,7 +10,9 @@ import { landing, fieldJoin, rules, stage } from './screens.js';
 const $=s=>document.querySelector(s);
 const main=$('#screen'), modal=$('#modal');
 const params=new URLSearchParams(location.search);
-const localSteam=params.has('steam') && ['localhost','127.0.0.1'].includes(location.hostname);
+const loopback=['localhost','127.0.0.1'].includes(location.hostname);
+const localSteam=loopback&&params.has('steam');
+const localLauncher=localSteam||(loopback&&params.has('launcher'));
 const publicBase='https://devenshah.com/Quiplash/';
 const tabKey='punchline.session.v1';
 const saved = (k) => {try {return JSON.parse(sessionStorage.getItem(k));} catch {return null;}};
@@ -41,12 +43,12 @@ function showJoin(code,msg='') {
 function urlFor(mode,code) {
   const url=new URL(location.pathname,location.origin);
   if(mode&&code)url.searchParams.set(mode,code);
-  if(localSteam && mode!=='room')url.searchParams.set('steam','1');
+  if(localLauncher && mode!=='room')url.searchParams.set(localSteam?'steam':'launcher','1');
   history.replaceState(null,'',url);
 }
 function setRoom(code) {
   room=code;
-  const u=localSteam?new URL(publicBase):new URL(location.pathname,location.origin);
+  const u=localLauncher?new URL(publicBase):new URL(location.pathname,location.origin);
   u.searchParams.set('room',code);invite=u.href;
   qr='';
   if(role==='host'&&window.qrcode) {
@@ -126,7 +128,7 @@ function reset(forget=true) {
   revision++;
   const old=net;net=null;role='';game=null;snapshot=null;room='';renderKey='';taskKey='';
   releaseEditor();old?.close();sound.stop();sentMatch.clear();
-  choices=[];selectionKey='';pending=false;
+  choices=[];selectionKey='';pending=false;timeSkew=0;
   if(forget){save(tabKey,null);urlFor('',null);}
   main.dataset.phase='home';main.innerHTML=landing();closeDialog();
 }
@@ -208,7 +210,7 @@ function dispatch(action) {
 function soundDialog(note='') {
   openDialog(`<span class="stamp">${icon('speaker')}</span><h2 id="modal-title">Sound booth</h2>
   <p>Music and narration play on the host screen.</p>${button(muted?'Turn host sound on':'Mute host sound','mute','lavender',muted?'muted':'speaker')}
-  <hr class="soft-sep"><h3>Host sound pack</h3><p class="modal-status" style="margin-top:8px">${sound.packName?'Using the '+e(sound.packName)+' recordings'+(sound.sessionOnly?' for this session.': ' on this browser.'):'Using the house band and browser announcer.'}</p>
+  <hr class="soft-sep"><h3>Host sound pack</h3><p class="modal-status" style="margin-top:8px">${sound.packName?'Using your Quiplash 2 recordings'+(sound.sessionOnly?' for this session.': ' on this browser.'):'Using the house band and browser announcer.'}</p>
   <p class="sound-note">To use your Quiplash 2 recordings, choose the game’s <b>TalkshowExport/project/media</b> folder. The audio stays on your device.</p>
   <input type="file" id="audio-folder" webkitdirectory multiple hidden><button data-act="import" class="small-action">Choose audio folder</button><div class="error" role="status">${e(note)}</div>`);
 }
@@ -224,6 +226,7 @@ async function copyInvite(){
 document.addEventListener('click',event=>{
   const target=event.target.closest('button');
   if(!target)return;
+  if(role==='host'&&!muted)sound.unlock();
   if(target.classList.contains('rules-open')){openDialog(rules());return;}
   if(target.classList.contains('sound-open')){soundDialog();return;}
   if(target.classList.contains('close-modal')){closeDialog();return;}
