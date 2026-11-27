@@ -11,7 +11,7 @@ function playerToken(p) {
 function roster(v) {
   return `<div class="roster">${v.players.map(playerToken).join('')}</div>${v.audienceCount ? `<p class="muted">${v.audienceCount} in the audience</p>` : ''}`;
 }
-function landing() {
+function landing({ showModelChoice, useStudioAtHost }) {
   return `<section class="hero" aria-label="Punchline comedy party game">
     <img class="hero-art" src="./assets/emcee.webp" alt="A grinning, bow-tied microphone stepping into the spotlight">
     <div class="hero-copy"><div class="hero-kicker">${icon('bolt')} COMEDY PARTY GAME</div><br>
@@ -19,7 +19,9 @@ function landing() {
     <p>Answer with words, GIFs, or pictures. Win the room with the funniest one.</p></div></section>
     <div class="meta"><span>${icon('players')}3–8 players</span><i></i><span>${icon('cards')}3 rounds</span><i></i><span>${icon('clock')}About 15 min</span></div>
     <div class="entry-grid"><section class="entry-card"><div class="card-heading"><span class="stamp">${icon('screen')}</span><h2>Host a game</h2></div>
-    <p>Open the host screen and invite friends with a four-letter room code.</p><div class="card-foot">${button('Create a room','host','primary','play')}</div></section>
+    <p>Open the host screen and invite friends with a four-letter room code.</p>
+    ${showModelChoice ? `<label class="host-model-choice"><input id="host-model" type="checkbox"${useStudioAtHost?' checked':''}><span>Use SmolLM2 for host banter <small>108 MB on first use</small></span></label>` : ''}
+    <div class="card-foot">${button('Create a room','host','primary','play')}</div></section>
     <section class="entry-card"><div class="card-heading"><span class="stamp alt">${icon('phone')}</span><h2>Join a game</h2></div>
     <p>Grab the code from your host and use this device as your controller.</p>
     <form class="card-foot form-row" id="code-form"><input required maxlength="4" minlength="4" pattern="[A-Za-z]{4}" name="code" class="field room-field" autocapitalize="characters" spellcheck="false" placeholder="Room code" aria-label="Four-letter room code"><button class="btn secondary" type="submit">${icon('ticket')}Join room</button></form></section></div>`;

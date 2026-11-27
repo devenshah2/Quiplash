@@ -4,3 +4,4 @@ node_modules/
 *.ogg
 *.swf
 *.jet
+.models/

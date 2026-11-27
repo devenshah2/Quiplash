@@ -1,5 +1,6 @@
 """Host Punchline with a local Quiplash 2 installation on macOS."""
 import argparse
+import json
 import mimetypes
 import re
 import shutil
@@ -13,7 +14,8 @@ ROOT = Path(__file__).resolve().parent
 LIBRARY = Path.home() / "Library" / "Application Support" / "Steam"
 GAME = Path("steamapps/common/The Jackbox Party Pack 3/The Jackbox Party Pack 3.app/Contents/Resources/macos/games/Quiplash2")
 WEB_FILES = {"index.html", "style.css", "editor.css", "app.js", "ui.js", "screens.js", "network.js",
-             "rich.js", "editor.js", "game.js", "audio.js", "prompts.js", "steam-questions.js"}
+             "rich.js", "editor.js", "game.js", "audio.js", "banter.js", "prompts.js", "steam-questions.js"}
+LOCAL_MODEL = ROOT / ".models" / "SmolLM2-135M-Instruct-Q4_K_M.gguf"
 PRIVATE_MEDIA = re.compile(r"/_steam/(\d{1,10})\.ogg")
 PROMPT_MEDIA = re.compile(r"/_steam/question/(\d{1,10})\.ogg")
 
@@ -33,6 +35,22 @@ class Screen(BaseHTTPRequestHandler):
             self.send_error(403)
             return
         path = unquote(urlsplit(self.path).path)
+        if path in {"/_local/announcer-status", "/_local/announcer.gguf"}:
+            if self.headers.get("Sec-Fetch-Site") == "cross-site":
+                self.send_error(403)
+                return
+            if path.endswith(".gguf"):
+                self.serve(LOCAL_MODEL, "application/octet-stream")
+            else:
+                body = json.dumps({"available": LOCAL_MODEL.is_file()}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+                self.end_headers()
+                self.wfile.write(body)
+            return
         if path.startswith("/_steam/"):
             if self.headers.get("Sec-Fetch-Site") == "cross-site":
                 self.send_error(403)

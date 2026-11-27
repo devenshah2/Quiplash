@@ -396,6 +396,7 @@ export function createEditor(container, { initial, onChange } = {}) {
       clearTimeout(pickerTimer);
       onlineRequest?.abort();
       onlineRequest = null;
+      grid.setAttribute('aria-busy', 'false');
       grid.replaceChildren();
       grid.scrollTop = 0;
       seen.clear();
