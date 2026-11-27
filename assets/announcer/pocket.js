@@ -53,7 +53,7 @@ const scenes = {
 const variants = [
   ['our {official}', 'my {official}', 'the evening {official}'],
   ['the {prop}', 'our {prop}', 'that suspicious {prop}'],
-  ['a little', 'a tiny bit', 'just a bit'],
+  ['leaned a little', 'leaned a tiny bit', 'leaned just a bit'],
   ['a very', 'a suspiciously', 'a remarkably'],
   ['Somebody', 'Someone'],
   ['somebody', 'someone'],
